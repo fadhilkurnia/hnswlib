@@ -68,7 +68,6 @@ namespace hnswlib {
 
         // empty constructor
         HierarchicalNSW(SpaceInterface<dist_t> *s) {
-
         }
 
         // constructor with saved index
@@ -81,7 +80,7 @@ namespace hnswlib {
                 link_list_locks_(max_elements), link_list_update_locks_(max_update_element_locks), element_levels_(max_elements) {
             max_elements_ = max_elements;
 
-            has_deletions_=false;
+            num_deleted_ = 0;
             data_size_ = s->get_data_size();
             fstdistfunc_ = s->get_dist_func();
             dist_func_param_ = s->get_dist_func_param();
@@ -186,7 +185,7 @@ namespace hnswlib {
 
             while (!candidateSet.empty()) {
                 std::pair<dist_t, tableint> curr_el_pair = candidateSet.top();
-                if ((-curr_el_pair.first) > lowerBound) {
+                if ((-curr_el_pair.first) > lowerBound && top_candidates.size() == ef_construction_) {
                     break;
                 }
                 candidateSet.pop();
@@ -275,7 +274,7 @@ namespace hnswlib {
 
                 std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
 
-                if ((-current_node_pair.first) > lowerBound) {
+                if ((-current_node_pair.first) > lowerBound && (top_candidates.size() == ef || has_deletions == false)) {
                     break;
                 }
                 candidate_set.pop();
@@ -550,7 +549,7 @@ namespace hnswlib {
                 }
             }
 
-            if (has_deletions_) {
+            if (num_deleted_) {
                 std::priority_queue<std::pair<dist_t, tableint  >> top_candidates1=searchBaseLayerST<true>(currObj, query_data,
                                                                                                            ef_);
                 top_candidates.swap(top_candidates1);
@@ -627,7 +626,6 @@ namespace hnswlib {
 
         // loadIndex loads index from external file
         void loadIndex(const std::string &location, SpaceInterface<dist_t> *s, size_t max_elements_i=0) {
-
             std::ifstream input(location, std::ios::binary);
 
             if (!input.is_open())
@@ -642,7 +640,7 @@ namespace hnswlib {
             readBinaryPOD(input, max_elements_);
             readBinaryPOD(input, cur_element_count);
 
-            size_t max_elements=max_elements_i;
+            size_t max_elements = max_elements_i;
             if(max_elements < cur_element_count)
                 max_elements = max_elements_;
             max_elements_ = max_elements;
@@ -703,9 +701,7 @@ namespace hnswlib {
             std::vector<std::mutex>(max_elements).swap(link_list_locks_);
             std::vector<std::mutex>(max_update_element_locks).swap(link_list_update_locks_);
 
-
             visited_list_pool_ = new VisitedListPool(1, max_elements);
-
 
             linkLists_ = (char **) malloc(sizeof(void *) * max_elements);
             if (linkLists_ == nullptr)
@@ -730,11 +726,9 @@ namespace hnswlib {
                 }
             }
 
-            has_deletions_=false;
-
             for (size_t i = 0; i < cur_element_count; i++) {
                 if(isMarkedDeleted(i))
-                    has_deletions_=true;
+                    num_deleted_ += 1;
             }
 
             input.close();
@@ -743,7 +737,7 @@ namespace hnswlib {
         }
 
         template<typename data_t>
-        std::vector<data_t> getDataByLabel(labeltype label)
+        std::vector<data_t> getDataByLabel(labeltype label) const
         {
             tableint label_c;
             auto search = label_lookup_.find(label);
@@ -764,19 +758,19 @@ namespace hnswlib {
         }
 
         static const unsigned char DELETE_MARK = 0x01;
-//        static const unsigned char REUSE_MARK = 0x10;
+        // static const unsigned char REUSE_MARK = 0x10;
         /**
          * Marks an element with the given label deleted, does NOT really change the current graph.
          * @param label
          */
         void markDelete(labeltype label)
         {
-            has_deletions_=true;
             auto search = label_lookup_.find(label);
             if (search == label_lookup_.end()) {
                 throw std::runtime_error("Label not found");
             }
-            markDeletedInternal(search->second);
+            tableint internalId = search->second;
+            markDeletedInternal(internalId);
         }
 
         /**
@@ -785,8 +779,31 @@ namespace hnswlib {
          * @param internalId
          */
         void markDeletedInternal(tableint internalId) {
-            unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId))+2;
-            *ll_cur |= DELETE_MARK;
+            assert(internalId < cur_element_count);
+            if (!isMarkedDeleted(internalId))
+            {
+                unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId))+2;
+                *ll_cur |= DELETE_MARK;
+                num_deleted_ += 1;
+            }
+            else
+            {
+                throw std::runtime_error("The requested to delete element is already deleted");
+            }
+        }
+
+        /**
+         * Remove the deleted mark of the node, does NOT really change the current graph.
+         * @param label
+         */
+        void unmarkDelete(labeltype label)
+        {
+            auto search = label_lookup_.find(label);
+            if (search == label_lookup_.end()) {
+                throw std::runtime_error("Label not found");
+            }
+            tableint internalId = search->second;
+            unmarkDeletedInternal(internalId);
         }
 
         /**
@@ -794,8 +811,17 @@ namespace hnswlib {
          * @param internalId
          */
         void unmarkDeletedInternal(tableint internalId) {
-            unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId))+2;
-            *ll_cur &= ~DELETE_MARK;
+            assert(internalId < cur_element_count);
+            if (isMarkedDeleted(internalId))
+            {
+                unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId))+2;
+                *ll_cur &= ~DELETE_MARK;
+                num_deleted_ -= 1;
+            }
+            else
+            {
+                throw std::runtime_error("The requested to undelete element is not deleted");
+            }
         }
 
         /**
@@ -856,8 +882,8 @@ namespace hnswlib {
                 }
 
                 for (auto&& neigh : sNeigh) {
-//                    if (neigh == internalId)
-//                        continue;
+                    // if (neigh == internalId)
+                    //     continue;
 
                     std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidates;
                     size_t size = sCand.find(neigh) == sCand.end() ? sCand.size() : sCand.size() - 1; // sCand guaranteed to have size >= 1
@@ -1131,7 +1157,7 @@ namespace hnswlib {
             }
 
             std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
-            if (has_deletions_) {
+            if (num_deleted_) {
                 top_candidates=searchBaseLayerST<true,true>(
                         currObj, query_data, std::max(ef_, k));
             }
