@@ -16,10 +16,10 @@ namespace
 using idx_t = hnswlib::labeltype;
 
 void test() {
-    int d = 4;
-    idx_t n = 100;
-    idx_t nq = 10;
-    size_t k = 10;
+    int d = 4;        // data dimmension (number of embeddings)
+    idx_t n = 100;    // number of data
+    idx_t nq = 10;    // number of query
+    size_t k = 10;    // number of neighboring data to be returned
    
     std::vector<float> data(n * d);
     std::vector<float> query(nq * d);
@@ -28,6 +28,7 @@ void test() {
     rng.seed(47);
     std::uniform_real_distribution<> distrib;
 
+    // generate random data and query
     for (idx_t i = 0; i < n * d; ++i) {
         data[i] = distrib(rng);
     }
@@ -57,6 +58,7 @@ void test() {
             gd.pop();
         }
     }
+    // test searchKnnCloserFirst of HNSW
     for (size_t j = 0; j < nq; ++j) {
         const void* p = query.data() + j * d;
         auto gd = alg_hnsw->searchKnn(p, k);

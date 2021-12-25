@@ -16,15 +16,67 @@ namespace hnswlib {
     template<typename dist_t>
     class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     public:
+
+        size_t max_elements_;
+        size_t cur_element_count;
+        size_t size_data_per_element_;    // the number of 4byte block needed to store an element's data: connection in lv0, data, label
+        size_t size_links_per_element_;   // ths number of 4byte block needed to store #connection and the connection itself.
+
+        size_t M_;                 // number of established connections
+        size_t maxM_;              // maximum number of connections for each element per layer
+        size_t maxM0_;             // maximum number of connections for each element at level0
+        size_t ef_construction_;   // size of the dynamic candidate list 
+
+        double mult_, revSize_;
+        int maxlevel_;
+
+        VisitedListPool *visited_list_pool_;
+        std::mutex cur_element_count_guard_;
+
+        std::vector<std::mutex> link_list_locks_;
+
+        // Locks to prevent race condition during update/insert of an element at same time.
+        // Note: Locks for additions can also be used to prevent this race condition 
+        // if the querying of KNN is not exposed along with update/inserts 
+        // i.e multithread insert/update/query in parallel.
+        std::vector<std::mutex> link_list_update_locks_;
+        tableint enterpoint_node_;
+
+        size_t size_links_level0_;
+        size_t offsetData_, offsetLevel0_;
+
+        char *data_level0_memory_;
+        char **linkLists_;                  // adjacency list for each data in each level
+        std::vector<int> element_levels_;   // the max level of each data, the index used is the data id
+
+        size_t data_size_;
+
+        bool has_deletions_;
+
+        size_t label_offset_;
+        DISTFUNC<dist_t> fstdistfunc_;
+        void *dist_func_param_;
+        std::unordered_map<labeltype, tableint> label_lookup_;
+
+        std::default_random_engine level_generator_;
+        std::default_random_engine update_probability_generator_;
+
+        std::mutex global;
+        size_t ef_;           // number of nearest to q elements to return, used in searchLayer
+
         static const tableint max_update_element_locks = 65536;
+
+        // empty constructor
         HierarchicalNSW(SpaceInterface<dist_t> *s) {
 
         }
 
+        // constructor with saved index
         HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location, bool nmslib = false, size_t max_elements=0) {
             loadIndex(location, s, max_elements);
         }
 
+        // constructor with raw data
         HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200, size_t random_seed = 100) :
                 link_list_locks_(max_elements), link_list_update_locks_(max_update_element_locks), element_levels_(max_elements) {
             max_elements_ = max_elements;
@@ -56,8 +108,6 @@ namespace hnswlib {
 
             visited_list_pool_ = new VisitedListPool(1, max_elements);
 
-
-
             //initializations for special treatment of the first node
             enterpoint_node_ = -1;
             maxlevel_ = -1;
@@ -70,13 +120,7 @@ namespace hnswlib {
             revSize_ = 1.0 / mult_;
         }
 
-        struct CompareByFirst {
-            constexpr bool operator()(std::pair<dist_t, tableint> const &a,
-                                      std::pair<dist_t, tableint> const &b) const noexcept {
-                return a.first < b.first;
-            }
-        };
-
+        // destructor, freeing used memories
         ~HierarchicalNSW() {
 
             free(data_level0_memory_);
@@ -88,51 +132,12 @@ namespace hnswlib {
             delete visited_list_pool_;
         }
 
-        size_t max_elements_;
-        size_t cur_element_count;
-        size_t size_data_per_element_;
-        size_t size_links_per_element_;
-
-        size_t M_;
-        size_t maxM_;
-        size_t maxM0_;
-        size_t ef_construction_;
-
-        double mult_, revSize_;
-        int maxlevel_;
-
-
-        VisitedListPool *visited_list_pool_;
-        std::mutex cur_element_count_guard_;
-
-        std::vector<std::mutex> link_list_locks_;
-
-        // Locks to prevent race condition during update/insert of an element at same time.
-        // Note: Locks for additions can also be used to prevent this race condition if the querying of KNN is not exposed along with update/inserts i.e multithread insert/update/query in parallel.
-        std::vector<std::mutex> link_list_update_locks_;
-        tableint enterpoint_node_;
-
-
-        size_t size_links_level0_;
-        size_t offsetData_, offsetLevel0_;
-
-
-        char *data_level0_memory_;
-        char **linkLists_;
-        std::vector<int> element_levels_;
-
-        size_t data_size_;
-
-        bool has_deletions_;
-
-
-        size_t label_offset_;
-        DISTFUNC<dist_t> fstdistfunc_;
-        void *dist_func_param_;
-        std::unordered_map<labeltype, tableint> label_lookup_;
-
-        std::default_random_engine level_generator_;
-        std::default_random_engine update_probability_generator_;
+        struct CompareByFirst {
+            constexpr bool operator()(std::pair<dist_t, tableint> const &a,
+                                      std::pair<dist_t, tableint> const &b) const noexcept {
+                return a.first < b.first;
+            }
+        };
 
         inline labeltype getExternalLabel(tableint internal_id) const {
             labeltype return_label;
@@ -157,7 +162,6 @@ namespace hnswlib {
             double r = -log(distribution(level_generator_)) * reverse_size;
             return (int) r;
         }
-
 
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
         searchBaseLayer(tableint ep_id, const void *data_point, int layer) {
@@ -374,7 +378,6 @@ namespace hnswlib {
             }
         }
 
-
         linklistsizeint *get_linklist0(tableint internal_id) const {
             return (linklistsizeint *) (data_level0_memory_ + internal_id * size_data_per_element_ + offsetLevel0_);
         };
@@ -408,6 +411,7 @@ namespace hnswlib {
 
             tableint next_closest_entry_point = selectedNeighbors.back();
 
+            // connecting cur_c with its new neighbors
             {
                 linklistsizeint *ll_cur;
                 if (level == 0)
@@ -431,6 +435,7 @@ namespace hnswlib {
                 }
             }
 
+            // connecting cur_c's neighbors with cur_c
             for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
 
                 std::unique_lock <std::mutex> lock(link_list_locks_[selectedNeighbors[idx]]);
@@ -462,7 +467,9 @@ namespace hnswlib {
                     }
                 }
 
-                // If cur_c is already present in the neighboring connections of `selectedNeighbors[idx]` then no need to modify any connections or run the heuristics.
+                // If cur_c is already present in the neighboring connections of 
+                // `selectedNeighbors[idx]` then no need to modify any connections 
+                // or run the heuristics.
                 if (!is_cur_c_present) {
                     if (sz_link_list_other < Mcurmax) {
                         data[sz_link_list_other] = cur_c;
@@ -510,13 +517,9 @@ namespace hnswlib {
             return next_closest_entry_point;
         }
 
-        std::mutex global;
-        size_t ef_;
-
         void setEf(size_t ef) {
             ef_ = ef;
         }
-
 
         std::priority_queue<std::pair<dist_t, tableint>> searchKnnInternal(void *query_data, int k) {
             std::priority_queue<std::pair<dist_t, tableint  >> top_candidates;
@@ -622,8 +625,8 @@ namespace hnswlib {
             output.close();
         }
 
+        // loadIndex loads index from external file
         void loadIndex(const std::string &location, SpaceInterface<dist_t> *s, size_t max_elements_i=0) {
-
 
             std::ifstream input(location, std::ios::binary);
 
@@ -688,17 +691,13 @@ namespace hnswlib {
 
             input.seekg(pos,input.beg);
 
-
+            // load all data to data_level0_memory_, stored in memory
             data_level0_memory_ = (char *) malloc(max_elements * size_data_per_element_);
             if (data_level0_memory_ == nullptr)
                 throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
             input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
 
-
-
-
             size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
-
 
             size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
             std::vector<std::mutex>(max_elements).swap(link_list_locks_);
@@ -818,7 +817,7 @@ namespace hnswlib {
         }
 
         void addPoint(const void *data_point, labeltype label) {
-            addPoint(data_point, label,-1);
+            addPoint(data_point, label, -1);
         }
 
         void updatePoint(const void *dataPoint, tableint internalId, float updateNeighborProbability) {
@@ -1019,10 +1018,9 @@ namespace hnswlib {
             tableint currObj = enterpoint_node_;
             tableint enterpoint_copy = enterpoint_node_;
 
-
             memset(data_level0_memory_ + cur_c * size_data_per_element_ + offsetLevel0_, 0, size_data_per_element_);
 
-            // Initialisation of the data and label
+            // Initialisation of the data and label, put the data and label to memory
             memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
             memcpy(getDataByInternalId(cur_c), data_point, data_size_);
 
