@@ -13,7 +13,7 @@ int main() {
 	char *path_data = "hnsw_data.dat";
 	char *path_edges = "hnsw_edge.dat";
 	char *path_nodes = "hnsw_node.dat";
-  char *path_stats = "hnsw_stat.dat";
+  	char *path_stats = "hnsw_stat.dat";
 	
 	// open index file
 	std::ifstream input(path_index, std::ios::binary);
@@ -23,10 +23,10 @@ int main() {
 	// prepare output files
 	std::ofstream output_nodes;
 	std::ofstream output_edges;
-  std::ofstream output_stats;
+  	std::ofstream output_stats;
 	output_nodes.open(path_nodes);
 	output_edges.open(path_edges);
-  output_stats.open(path_stats);
+  	output_stats.open(path_stats);
 	
 	// read all hnsw parameters
 	size_t offsetLevel0_, max_elements_, cur_element_count, size_data_per_element_;

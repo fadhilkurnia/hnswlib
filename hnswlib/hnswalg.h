@@ -21,6 +21,7 @@ namespace hnswlib {
         size_t cur_element_count;
         size_t size_data_per_element_;    // the number of 4byte block needed to store an element's data: connection in lv0, data, label
         size_t size_links_per_element_;   // ths number of 4byte block needed to store #connection and the connection itself.
+        size_t num_deleted_;
 
         size_t M_;                 // number of established connections
         size_t maxM_;              // maximum number of connections for each element per layer
