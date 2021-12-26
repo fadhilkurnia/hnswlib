@@ -228,8 +228,8 @@ void deep_test10m() {
 	int subset_size_milllions = 10;
 	int efConstruction = 40;
 	int M = 16;
-    size_t vecsize = subset_size_milllions * 1000000;
     size_t qsize = 10000;
+    size_t vecsize = subset_size_milllions * 1000000 = qsize;
     size_t vecdim = 96;
     char path_index[1024];
     char path_gt[1024];
@@ -276,28 +276,24 @@ void deep_test10m() {
     unsigned char *mass = new unsigned char[vecdim];
     ifstream input(path_raw_data, ios::binary);
     int in = 0;
-    // L2SpaceI l2space(vecdim);
     InnerProductSpace ipspace(vecdim);
 
     HierarchicalNSW<float> *appr_alg;
     if (exists_test(path_index)) {
         cout << "Loading index from " << path_index << ":\n";
-        appr_alg = new HierarchicalNSW<int>(&ipspace, path_index, false);
+        appr_alg = new HierarchicalNSW<float>(&ipspace, path_index, false);
         cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     } else {
         cout << "Building index:\n";
-        appr_alg = new HierarchicalNSW<int>(&ipspace, vecsize, M, efConstruction);
+        appr_alg = new HierarchicalNSW<float>(&ipspace, vecsize, M, efConstruction);
 
         input.read((char *) &in, 4);
-        if (in != vecdim) {
+	    cout << "dimmension is " << in << ", expecting " << vecdim << "\n";
+        if (in != 96) {
             cout << "file error";
             exit(1);
         }
         input.read((char *) massf, in*4);
-
-        // for (int j = 0; j < vecdim; j++) {
-        //     mass[j] = massb[j] * (1.0f);
-        // }
 
         appr_alg->addPoint((void *) (massf), (size_t) 0);
         int j1 = 0;
@@ -311,7 +307,7 @@ void deep_test10m() {
 #pragma omp critical
             {
                 input.read((char *) &in, 4);
-                if (in != vecsize) {
+                if (in != 96) {
                     cout << "file error";
                     exit(1);
                 }
@@ -342,7 +338,7 @@ void deep_test10m() {
     // cout << "Loaded gt\n";
     // for (int i = 0; i < 1; i++)
     //     test_vs_recall(massQ, vecsize, qsize, *appr_alg, vecdim, answers, k);
-    // cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
+    cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     return;
 }
 

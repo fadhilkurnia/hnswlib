@@ -117,7 +117,6 @@ int main() {
 
 			output_nodes << l << ", " << l << "." << i << ", ";
 			unsigned int* raw_element_data = (unsigned int*) elements_data + i * size_data_per_element_ + offsetData_;
-			output_nodes << l << ", " << l << "." << i << ", ";
 			for(int j=0; j<dimmension; j++) {
 				float temp = *(raw_element_data + j);
 				output_nodes << temp << " ";
